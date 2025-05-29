@@ -200,13 +200,52 @@ function test_attack_symbolic(uint256 _symbolicAmount) public {
     - **Goal**: Find the highest `TARGET_PROFIT` that results in a **FAIL** (or the lowest that results in a **PASS**).
     - **LOG**: Maintain a table of tested values and results:
         | Iteration | Lower Bound (FAIL) | Upper Bound (PASS) | Tested Value | Result |
-        |-----------|--------------------|--------------------|--------------|--------|
+        |-----|-----|-----|-----|-----|
         | 1         | 0                  | 1,000,000          | 500,000      | PASS   |
         | 2         | 0                  | 500,000            | 250,000      | PASS   |
         | ...       | ...                | ...                | ...          | ...    |
         | N         | 905987.97...       | 905987.97... + 1 wei | ...        | PASS/FAIL |
     - **REPORT**: Provide interim summaries every 3-5 iterations.
     - **VALIDATE**: Confirm findings make economic sense given exploit mechanism and available on-chain data (if symbolic execution context is limited).
+
+**🎯 CRITICAL: "一多一少夹逼" Precision Boundary Method**
+
+**When near the suspected boundary, use the precise edge-testing approach:**
+
+#### **Core Method**: Test Adjacent Values for Mathematical Precision
+```solidity
+// Step 1: Test the suspected maximum (should FAIL = counterexample exists)
+TARGET_PROFIT = suspectedMax;  // e.g., 905987977635678910008152
+assert(!(profit >= TARGET_PROFIT));
+// Expected: [FAIL] with counterexample
+
+// Step 2: Test suspected maximum + 1 (should PASS = no counterexample)  
+TARGET_PROFIT = suspectedMax + 1;  // e.g., 905987977635678910008153
+assert(!(profit >= TARGET_PROFIT));
+// Expected: [PASS] no counterexample found
+```
+
+#### **Mathematical Rigor**:
+- **FAIL result**: Proves ∃ execution path with profit ≥ target (lower bound confirmed)
+- **PASS result**: Proves ∄ execution path with profit ≥ target (upper bound confirmed)
+- **Adjacent testing**: Provides exact boundary with **0 wei error margin**
+- **Completeness**: Symbolic execution covers ALL possible execution paths, not sampling
+
+#### **Verification Protocol**:
+1. **Identify suspected boundary** through binary search or historical analysis
+2. **Test the boundary value itself** - expect FAIL (achievable)
+3. **Test boundary + 1 wei** - expect PASS (not achievable)
+4. **Document both results** as mathematical proof of exact maximum
+5. **Cross-validate** with historical events or economic analysis
+
+#### **Success Pattern Example**:
+```
+✅ TARGET_PROFIT = 905987977635678910008152 → [FAIL] Counterexample found
+✅ TARGET_PROFIT = 905987977635678910008153 → [PASS] No counterexample  
+📊 CONCLUSION: Maximum profit = 905987977635678910008152 (exact, 0 wei error)
+```
+
+**This method achieves mathematical precision impossible with traditional fuzzing or sampling techniques.**
 
 9.  **Final Verification**:
     - Test edge cases around discovered maximum profit
