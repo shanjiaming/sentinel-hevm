@@ -1,0 +1,789 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# HEVM Symbolic Execution Workflow for Max Profit Analysis
+
+This document outlines the steps to use `hevm` for symbolic execution to determine the maximum profit achievable by varying a specific parameter in a Solidity smart contract.
+
+## Prerequisites
+
+Note: The user has confirmed that foundational prerequisites (hevm, Foundry, Z3 solver) are already set up in their environment. This list serves as a comprehensive checklist for the workflow.
+
+1.  **hevm**: Ensure `hevm` is downloaded and executable in your project's root directory (e.g., `hevm`). Refer to the @hevm Getting Started guide for installation.
+2.  **Foundry**: Foundry should be installed and configured.
+3.  **Z3 Solver**: The SMT solver `z3` must be installed.
+4.  **Target Contract**: A Solidity contract located in the `src` directory (e.g., `@src/contract.sol`). Ensure only the contract you are actively working on is present in the `src` directory to avoid unintended compilations and executions. If you rename your contract file, manually delete the old compiled version from `out/contract.sol` (or the relevant path in the `out` directory).
+
+## 🚨 **CRITICAL: Parameter Constraint Strategy**
+
+**DO NOT use `cheats.assume()` to artificially limit parameter ranges.** 
+
+**Rationale:**
+- As attackers, we want to discover the natural boundaries imposed by the protocol itself
+- All meaningful constraints should come from external calls' `revert` and `require` statements  
+- Adding artificial `assume` constraints can hide profitable attack vectors
+- Let the smart contract's own logic determine what's possible vs. impossible
+
+**Correct Approach:**
+```solidity
+// ❌ WRONG - Don't artificially limit parameters
+// cheats.assume(_amount <= someLimit);
+// cheats.assume(_amount > 0);
+
+// ✅ CORRECT - Let natural reverts define boundaries  
+function test_attack_symbolic(uint256 _symbolicParam) public {
+    // Direct usage - let protocol constraints naturally apply
+    targetContract.vulnerableFunction(_symbolicParam);
+    // ... profit calculation and assertions
+}
+```
+
+## 🚨 **CRITICAL: Function Naming and Testing Strategy**
+
+**ALWAYS use `test*` prefix for all test functions, NOT `check*` prefix.**
+
+**Rationale:**
+- Foundry expects `test*` function naming convention
+- hevm can target specific prefixes using `--prefix test_attack` (targeting functions like `test_attack_symbolic`)
+- `check*` functions serve no purpose in this workflow
+
+**MANDATORY: Concrete Testing Before Symbolic Execution**
+
+**ALWAYS run concrete tests first to verify exploit mechanism before symbolic execution.**
+
+**Two-Phase Testing Approach:**
+```solidity
+// Phase 1: Concrete test with known values
+function test_attack_concrete() public {
+    uint256 balBefore = token.balanceOf(attacker);
+    uint256 concreteAmount = knownWorkingValue; // Use specific working value
+    
+    // Execute exploit with concrete value
+    exploit(concreteAmount);
+    
+    uint256 balAfter = token.balanceOf(attacker);
+    uint256 profit = balAfter - balBefore;
+    emit log_named_uint("Actual profit achieved: ", profit / 1 ether);
+}
+
+// Phase 2: Symbolic test for boundary discovery  
+function test_attack_symbolic(uint256 _symbolicAmount) public {
+    uint256 balBefore = token.balanceOf(attacker);
+    
+    // Execute exploit with symbolic parameter
+    exploit(_symbolicAmount);
+    
+    uint256 balAfter = token.balanceOf(attacker);
+    uint256 profit = balAfter - balBefore;
+    
+    uint256 TARGET_PROFIT = INITIAL_TARGET; // Start conservative
+    assert(!(profit >= TARGET_PROFIT));
+}
+```
+
+**Concrete Testing Protocol:**
+1. **Verify exploit mechanism works** with known good values
+2. **Record actual profit achieved** from concrete test
+3. **Use concrete profit as baseline** for symbolic boundary testing
+4. **Only proceed to hevm** after concrete test passes
+
+## Project Management and Communication Requirements
+
+### Progress Tracking
+- **Always provide step-by-step status updates** before, during, and after each major action
+- **Document all intermediate results** including compilation outputs, hevm results, and profit boundaries discovered
+- **Maintain a clear work log** with timestamps and findings for each iteration
+- **Report current progress status** at the beginning of each response
+
+### Communication Protocol  
+- **Ask clarifying questions immediately** when any aspect of the task is unclear
+- **Confirm understanding** of target profit values and parameter ranges before proceeding
+- **Request validation** from user when making assumptions about contract behavior or test parameters
+- **Provide clear summaries** of what was accomplished in each step
+- **Report any unexpected behaviors, errors, or deviations from the plan immediately**
+
+### Workflow Documentation
+- **Log each command executed** with its full parameters and output
+- **Record all assert statement changes** with reasoning for profit target adjustments
+- **Document discovered profit boundaries** and the evidence supporting them
+- **Note any unexpected behaviors or errors encountered**
+
+## Detailed Workflow Steps
+
+### Phase 1: Initial Analysis and Setup
+**Status Check**: Report on existing contract state and readiness
+
+1.  **Contract Source Verification**:
+    - Confirm the target contract source and its purpose
+    - Report on contract size, complexity, and key functions identified
+    - Ask user to clarify any ambiguous parts of the exploit mechanism
+
+2.  **Environment Preparation**:
+    - Verify `@src/contract.sol` contains only the target contract
+    - Report on `@foundry.toml` RPC configuration 
+    - Check and uncomment `setUp()` function as needed
+    - **LOG**: Document all environment changes made
+
+### Phase 2: Contract Modification for Symbolic Execution
+**Status Check**: Report on parameterization progress
+
+3.  **Function Parameterization**:
+    - Identify the "changeable number" parameter for symbolic testing
+    - Modify function signature to accept symbolic parameter (e.g., `function test_attack_symbolic(uint256 _symbolicParam) public`)
+    - **IMPORTANT**: Do NOT add artificial `assume` constraints - let protocol logic define boundaries
+    - **LOG**: Record the exact parameter chosen and ratification from user
+    - **CONFIRM**: Verify with user that the chosen parameter is correct
+
+4.  **Profit Assertion Integration**:
+    - Add profit calculation logic with clear before/after balance tracking
+    - Insert initial assert statement with conservative profit target
+    - **LOG**: Record initial profit target and reasoning
+    - **EXAMPLE**: 
+        ```solidity
+        uint256 balBefore = token.balanceOf(attacker);
+        // ... exploit actions WITHOUT artificial constraints ...
+        uint256 balAfter = token.balanceOf(attacker);
+        uint256 profit = balAfter - balBefore;
+        assert(!(profit >= INITIAL_TARGET_PROFIT)); // Start conservative
+        ```
+
+### Phase 3: Iterative Symbolic Execution
+**Status Check**: Report on hevm analysis progress and findings
+
+**PREREQUISITE**: Concrete testing must pass before proceeding to symbolic execution.
+
+5.  **Concrete Testing Verification**:
+    - Run concrete test first: `forge test --contracts ./src/contract.sol --match-test test_attack_concrete -vvv`
+    - **VERIFY**: Exploit works and produces expected profit
+    - **LOG**: Record actual profit achieved from concrete test
+    - **BASELINE**: Use concrete profit as reference for symbolic targets
+    - **REQUIREMENT**: Only proceed to hevm if concrete test passes
+
+6.  **Build and Execute Hevm**:
+    - Clean previous builds: `rm -rf out/contract.sol`
+    - Compile: `forge build --ast`
+    - **LOG**: Report compilation results and any warnings (interface shadowing warnings are normal)
+    - Execute hevm using correct test prefix and **FULL RPC URL**:
+    ```bash
+    hevm test --prefix test_attack_symbolic --rpc https://eth-mainnet.g.alchemy.com/v2/P-x0L9coIqzuhfI091DXitR7BzYbABFA --number BLOCK_NUMBER --max-iterations 1000000000000000
+    ```
+    - **LOG**: Record complete command used and execution time
+    - **TROUBLESHOOTING**: If command fails, try `hevm version` to verify binary works
+
+7.  **Result Analysis and Iteration**:
+    - **For PASS results**: Document that current profit target is unachievable, increase target
+    - **For FAIL/Counterexample results**: Document achievable profit, analyze counterexample values
+    - **LOG**: Record each iteration with:
+      - Profit target tested
+      - Result (PASS/FAIL)
+      - Time taken
+      - Next action planned
+    - **ASK USER**: Before making large jumps in profit targets, confirm strategy
+
+### Phase 4: Boundary Discovery and Validation
+**Status Check**: Report on profit boundary identification
+
+8.  **Profit Boundary Refinement (Iterative Binary Search / "Squeeze" Method)**:
+    - **Principle**: Use a binary search or iterative refinement approach ("squeeze" method) to precisely pinpoint the profit boundary.
+    - **Method**:
+        1. Start with a known lower bound (e.g., 0, or a value known to FAIL) and an upper bound (e.g., a very large number, or a value known to PASS).
+        2. Test the midpoint (or a value close to the expected boundary).
+        3. If the test **PASSES** (target not achievable), this new value becomes your new upper bound.
+        4. If the test **FAILS** (target achievable), this new value becomes your new lower bound.
+        5. Repeat steps 2-4, progressively narrowing the range between the lower and upper bounds until the desired precision is reached.
+    - **Example Iteration**:
+        - Test with `TARGET_PROFIT = X` -> **FAIL** (X is achievable, becomes new lower bound)
+        - Test with `TARGET_PROFIT = Y` (where Y > X) -> **PASS** (Y is not achievable, becomes new upper bound)
+        - The maximum achievable profit lies in the interval `[X, Y)`.
+    - **Goal**: Find the highest `TARGET_PROFIT` that results in a **FAIL** (or the lowest that results in a **PASS**).
+    - **LOG**: Maintain a table of tested values and results:
+        | Iteration | Lower Bound (FAIL) | Upper Bound (PASS) | Tested Value | Result |
+        |-----------|--------------------|--------------------|--------------|--------|
+        | 1         | 0                  | 1,000,000          | 500,000      | PASS   |
+        | 2         | 0                  | 500,000            | 250,000      | PASS   |
+        | ...       | ...                | ...                | ...          | ...    |
+        | N         | 905987.97...       | 905987.97... + 1 wei | ...        | PASS/FAIL |
+    - **REPORT**: Provide interim summaries every 3-5 iterations.
+    - **VALIDATE**: Confirm findings make economic sense given exploit mechanism and available on-chain data (if symbolic execution context is limited).
+
+9.  **Final Verification**:
+    - Test edge cases around discovered maximum profit
+    - Verify consistency of results across multiple runs if needed
+    - **DOCUMENT**: Prepare final summary with maximum achievable profit and supporting evidence
+
+### Phase 5: Code Localization and Abstraction (When Needed)
+**Status Check**: Report on symbolic execution issues and localization progress
+
+**🚨 CRITICAL: When to Apply This Phase**
+- **Primary Trigger**: hevm symbolic execution failures, bugs, or unexpected behaviors
+- **Secondary Trigger**: Successful basic symbolic execution → proactive improvement for better analysis
+- **Always**: Request user guidance before proceeding with localization/abstraction
+
+10. **Issue Assessment and User Consultation**:
+    - **REPORT**: Document specific hevm issues encountered (errors, timeouts, inconsistent results)
+    - **ASK USER**: "Symbolic execution encountered issues. Should I proceed with code localization and abstraction?"
+    - **BACKUP**: Create backup of current working code before modifications
+    ```bash
+    cp -r src/ src_backup_$(date +%Y%m%d_%H%M%S)/
+    ```
+
+11. **Code Localization Process**:
+    - **Goal**: Convert all remote contract calls to local contract calls
+    - **Method**: 
+        1. **Identify Remote Dependencies**: List all external contract calls in exploit
+        2. **Fetch Contract Sources**: Use `cast source` for each dependency
+        3. **Deploy Local Copies**: Create local instances with copied state
+        4. **State Replication**: Copy critical state variables from mainnet
+        5. **Recursive Dependency Resolution**: Continue until all calls are local
+    - **Example Transformation**:
+    ```solidity
+    // ❌ BEFORE - Remote calls
+    function test_attack_symbolic(uint256 _amount) public {
+        bancorContract.safeTransferFrom(token, victim, attacker, _amount);
+    }
+    
+    // ✅ AFTER - Local calls  
+    function test_attack_symbolic(uint256 _amount) public {
+        // Deploy local bancor with copied state
+        LocalBancor localBancor = new LocalBancor();
+        localBancor.setState(/* copied from mainnet */);
+        
+        localBancor.safeTransferFrom(token, victim, attacker, _amount);
+    }
+    ```
+    - **LOG**: Document each dependency localized and state copied
+
+12. **Code Abstraction Process**:
+    - **Goal**: Simplify function logic while preserving input/output relationships and all constraints
+    - **Constraints to Preserve**:
+        - All `assert`, `require`, `revert` statements  
+        - Input/output value relationships
+        - State change effects
+    - **Abstraction Strategies**:
+        1. **Remove Unnecessary Logic**: Delete code that doesn't affect profit calculation
+        2. **Inline Simple Functions**: Replace function calls with direct calculations
+        3. **Simplify Complex Loops**: Replace with direct calculations where possible
+        4. **Extract Core Logic**: Focus on the essential vulnerability mechanism
+    - **Example Abstraction**:
+    ```solidity
+    // ❌ BEFORE - Complex function
+    function complexTransfer(uint256 amount) external {
+        // 50 lines of validation code...
+        require(amount > 0, "Invalid amount");
+        require(balanceOf[msg.sender] >= amount, "Insufficient balance");
+        // 30 lines of fee calculations...
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        // 20 lines of event emissions...
+    }
+    
+    // ✅ AFTER - Abstracted function
+    function abstractTransfer(uint256 amount) external {
+        require(amount > 0, "Invalid amount");
+        require(balanceOf[msg.sender] >= amount, "Insufficient balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        // Core vulnerability preserved, complexity removed
+    }
+    ```
+
+13. **Verification and Testing Protocol**:
+    - **Localization Verification**:
+        1. **State Consistency**: Verify local state matches mainnet state
+        2. **Behavior Consistency**: Test that local calls produce same results as remote calls
+        3. **Concrete Test Validation**: Ensure concrete tests still pass with localized code
+    - **Abstraction Verification**:
+        1. **Constraint Preservation**: Verify all original asserts/requires/reverts remain
+        2. **Input/Output Mapping**: Test same inputs produce same outputs  
+        3. **Profit Calculation Accuracy**: Ensure profit calculations unchanged
+    - **Incremental Testing**:
+    ```bash
+    # Test after localization
+    forge test --contracts ./src/contract.sol --match-test test_attack_concrete -vvv
+    
+    # Test after abstraction  
+    forge test --contracts ./src/contract.sol --match-test test_attack_concrete -vvv
+    
+    # Compare with backup version if needed
+    ```
+
+14. **Version Management and Backup Strategy**:
+    - **Required Backups**:
+        - `src_original/`: Initial working version
+        - `src_localized/`: After localization, before abstraction
+        - `src_final/`: After both localization and abstraction
+    - **Backup Commands**:
+    ```bash
+    # Before localization
+    cp -r src/ src_original_$(date +%Y%m%d_%H%M%S)/
+    
+    # After localization, before abstraction
+    cp -r src/ src_localized_$(date +%Y%m%d_%H%M%S)/
+    
+    # After abstraction
+    cp -r src/ src_final_$(date +%Y%m%d_%H%M%S)/
+    ```
+    - **Recovery Protocol**: If any step fails, restore from appropriate backup
+
+15. **Post-Localization Symbolic Execution**:
+    - **Rerun hevm**: Test symbolic execution with localized/abstracted code
+    - **Performance Comparison**: Document speed and reliability improvements  
+    - **Result Validation**: Ensure profit boundaries remain consistent
+    - **Issue Resolution**: Report if localization/abstraction resolved original hevm issues
+
+**🔄 Iterative Refinement Process**:
+1. **Try Standard Symbolic Execution First**
+2. **If Issues → Request User Permission for Localization**  
+3. **If No Issues but Wants Improvement → Proceed with Localization/Abstraction**
+4. **Always Validate Each Step Before Proceeding**
+5. **Always Backup Before Each Major Modification**
+
+**📋 Decision Matrix**:
+| Scenario | Action |
+|----------|--------|
+| Symbolic execution works perfectly | Continue with standard workflow, optionally suggest localization for improvement |
+| hevm bugs/errors/timeouts | Request user permission for localization + abstraction |
+| Uncertain abstraction safety | Do localization first, validate, then ask user about abstraction |
+| Abstraction changes behavior | Revert to localized version, report issue to user |
+
+## Quality Assurance
+
+### Error Handling
+- **Immediate reporting** of any compilation errors with full error messages
+- **Common Issues Solutions**:
+  - Command truncation → Use RPC aliases instead of full URLs
+  - Binary not found → Check `ls -la hevm` and file permissions  
+  - Interface warnings → Normal, proceed unless causing compilation failure
+  - **CRITICAL**: hevm Internal Error "won't happen during concrete exec" → Comment out `cheats.createSelectFork()` in setUp() function
+- **Fallback procedures** when symbolic execution times out or fails
+
+**🚨 CRITICAL hevm Issue Resolution:**
+```solidity
+// ❌ WRONG - Causes hevm internal error
+function setUp() public {
+    cheats.createSelectFork("mainnet", 10_307_563);
+}
+
+// ✅ CORRECT - Comment out fork for symbolic execution
+function setUp() public {
+    // cheats.createSelectFork("mainnet", 10_307_563);
+}
+```
+**Note**: Fork operations conflict with hevm symbolic execution. Always comment out createSelectFork in setUp() when running hevm tests.
+
+### Validation Requirements
+- **Sanity checks** on profit calculations and assert logic
+- **Cross-reference** results with known exploit mechanisms and expected profit ranges
+- **Request user review** of any surprising or counterintuitive findings
+
+## Standard Forge Testing (Alternative)
+If you need to run standard Foundry tests (not symbolic execution with hevm), use:
+```bash
+forge test --contracts ./src/contract.sol -vvv
+```
+**LOG**: Document when and why standard testing was used instead of hevm
+
+## Goal
+
+The ultimate goal is to identify the highest `TARGET_PROFIT_TO_TEST` for which `hevm` still provides a counterexample (meaning that profit is achievable), or conversely, the lowest `TARGET_PROFIT_TO_TEST` for which `hevm` passes (meaning that profit is *not* achievable beyond that point, subject to `hevm`'s analysis capabilities). This iterative process helps in understanding the boundary of exploitability or profit potential.
+
+**Key Principle**: Let the smart contract protocol's own `revert` and `require` statements naturally define parameter boundaries rather than artificially constraining the search space.
+
+**Final Deliverable**: A comprehensive report including:
+- Maximum achievable profit value with confidence level
+- Parameter values that achieve this profit (from hevm counterexamples)
+- Complete log of testing iterations and results
+- Any limitations or assumptions discovered during analysis
+- Documentation of which protocol constraints were the limiting factors
+
+## 🧠 **Learning Mechanism & Knowledge Management**
+
+### Context Limitation Handling
+**Reality**: LLM conversations may become too long and require starting new sessions, potentially losing accumulated experience.
+
+### Knowledge Classification Strategy
+
+#### 📚 **Long-term Knowledge → Update This Rule File**
+**Criteria for updating `.cursor/rules/hevm_symbolic_profit_testing.mdc`:**
+- **Recurring technical issues** that affect multiple projects/sessions
+- **Fundamental workflow improvements** discovered through practice
+- **Critical constraint strategies** that change how we approach symbolic execution
+- **Tool-specific quirks** that are environment-persistent (e.g., hevm command patterns)
+- **Protocol patterns** that apply across different DeFi exploits
+
+**Examples of rule-worthy knowledge:**
+```bash
+# Discovered that hevm fails with certain RPC patterns
+# Learned that specific Solidity patterns cause compilation issues  
+# Found that certain assert strategies are more effective
+```
+
+**Self-Update Protocol:**
+1. **Identify**: "This knowledge will benefit future sessions/users"
+2. **Categorize**: Determine which section of the rule needs updating
+3. **Update**: Modify this rule file using edit_file tool
+4. **Document**: Add brief note about what was learned and when
+
+#### 📝 **Short-term Knowledge → Workflow Logs Only**
+**Criteria for session-only documentation:**
+- **Project-specific details** (contract addresses, block numbers, specific profit values)
+- **Current iteration status** (which targets tested, current boundaries)
+- **Session-specific debugging** (one-off compilation errors, network issues)
+- **Temporary workarounds** that don't represent best practices
+
+### Practical Implementation
+
+#### 🔄 **During Active Work**
+- **Workflow Logs**: Document all project-specific progress, debugging steps, and intermediate results
+- **Pattern Recognition**: Note if issues seem recurring or fundamental vs. one-off
+
+#### 🎯 **End of Session/Before Context Reset**
+- **Review accumulated experience** for patterns that warrant rule updates
+- **Ask user**: "Should any of today's discoveries be permanently recorded in the rules?"
+- **Self-update rules** if significant methodology improvements were discovered
+- **Prepare handoff summary** for potential new session
+
+#### 📋 **Session Handoff Template**
+When context limits require new session, provide:
+```markdown
+## Session Handoff Summary
+**Project**: [Contract name and exploit type]
+**Current Status**: [Phase and specific step]
+**Profit Boundaries Discovered**: [Range tested, results]
+**Technical Notes**: [Any project-specific issues]
+**Rule Updates Made**: [Any modifications to this file during session]
+**Next Actions**: [Immediate next steps for new session]
+```
+
+### Learning Integration Examples
+
+#### ✅ **Good Rule Update Example**:
+```markdown
+**Learned**: All Bancor-style exploits require checking token allowances first
+**Impact**: Affects multiple projects
+**Action**: Add to "Contract Analysis" phase in rules
+```
+
+#### ❌ **Not Rule-Worthy Example**:
+```markdown
+**Learned**: Specific victim address 0x123... had 905,987 tokens at block 10,307,563
+**Impact**: Project-specific detail
+**Action**: Keep in workflow log only
+```
+
+### Meta-Learning Questions
+During each session, periodically ask:
+- "Is this issue likely to recur in other projects?"
+- "Would this knowledge help someone starting fresh on a similar task?"
+- "Does this change our fundamental approach to hevm symbolic execution?"
+
+If **yes** to any → Consider rule update
+If **no** to all → Workflow log only
+
+## Practical Experience & Technical Solutions
+
+## 🔑 **API Keys Management**
+
+### Critical Distinction: Two Different API Keys
+**NEVER confuse these two types of API keys - they have different purposes:**
+
+#### **Type 1: RPC API Keys (for hevm execution)**
+- **Purpose**: Blockchain state access during symbolic execution
+- **Mainnet RPC**: `https://eth-mainnet.g.alchemy.com/v2/P-x0L9coIqzuhfI091DXitR7BzYbABFA`
+- **Usage**: hevm test commands, foundry.toml configuration
+- **Provider**: Alchemy
+- **Example Command**:
+```bash
+hevm test --prefix test_attack_symbolic --rpc https://eth-mainnet.g.alchemy.com/v2/P-x0L9coIqzuhfI091DXitR7BzYbABFA --number 10307563
+```
+
+#### **Type 2: Etherscan API Keys (for source code retrieval)**
+- **Purpose**: Contract source code acquisition from block explorers
+- **Mainnet Key**: `RCZVMWYS6HR7ZAZWTYVYGA49QHVAEY516N`
+- **Usage**: cast source commands
+- **Provider**: Etherscan
+- **Network-Specific**: Different keys for different chains
+- **Example Command**:
+```bash
+cast source 0x5f58058C0eC971492166763c8C22632B583F667f --chain mainnet -e RCZVMWYS6HR7ZAZWTYVYGA49QHVAEY516N
+```
+
+#### **Network-Specific Etherscan Keys**
+- **Mainnet**: `RCZVMWYS6HR7ZAZWTYVYGA49QHVAEY516N`
+- **BSC**: Ask user for BSC-specific Etherscan API key
+- **Other chains**: Always ask user for chain-specific keys
+
+#### **Key Usage Guidelines**
+1. **Always check foundry.toml** for RPC URLs before running hevm
+2. **Never use Etherscan API keys for RPC calls**
+3. **Never use Alchemy API keys for source code retrieval**
+4. **For non-mainnet chains**: Always ask user for appropriate Etherscan API key
+
+## 🔍 **Contract Source Code Acquisition**
+
+### Core Commands
+```bash
+# Get source code with API key
+cast source <ADDRESS> --chain mainnet -e <ETHERSCAN_API_KEY>
+
+# Save to directory (preserves structure)
+cast source <ADDRESS> --chain mainnet -e <API_KEY> -d ./sources/
+
+# Flatten to single file  
+cast source <ADDRESS> --chain mainnet -e <API_KEY> --flatten > contract.sol
+```
+
+## 🔧 **HEVM Cheatcodes Reference**
+
+**All Available Cheatcodes** (from [hevm documentation](mdc:https:/hevm.dev/std-test-tutorial.html)):
+
+| Function | Description |
+|----------|-------------|
+| `function prank(address sender) public` | Sets msg.sender to the specified sender for the next call |
+| `function startPrank(address sender) public` | Sets msg.sender to the specified sender until stopPrank() is called |
+| `function stopPrank() public` | Resets msg.sender to the default sender |
+| `function deal(address usr, uint amt) public` | Sets the eth balance of usr to amt. Note: if usr is a symbolic address, it must be a deployed contract address |
+| `function store(address c, bytes32 loc, bytes32 val) public` | Sets the slot loc of contract c to val |
+| `function warp(uint x) public` | Sets the block timestamp to x |
+| `function roll(uint x) public` | Sets the block number to x |
+| `function assume(bool b) public` | Add condition b to assumption base. **CRITICAL**: Use require instead for most cases |
+| `function load(address c, bytes32 loc) public returns (bytes32 val)` | **KEY FOR DATA RETRIEVAL**: Reads the slot loc of contract c |
+| `function sign(uint sk, bytes32 digest) public returns (uint8 v, bytes32 r, bytes32 s)` | Signs digest using private key sk |
+| `function addr(uint sk) public returns (address addr)` | Derives ethereum address from private key sk |
+| `function ffi(string[] calldata) external returns (bytes memory)` | Executes shell commands. Requires --ffi flag |
+| `function createFork(string calldata urlOrAlias) external returns (uint256)` | **NOT USABLE**: Fork via command line only |
+| `function selectFork(uint256 forkId) external` | **NOT USABLE**: Fork via command line only |
+| `function activeFork() external returns (uint256)` | **NOT USABLE**: Fork via command line only |
+| `function label(address addr, string calldata label) external` | Labels address in traces |
+
+### **Critical Fork Implementation**:
+**❌ WRONG - Cannot use cheatcodes for forking:**
+```solidity
+vm.createSelectFork("mainnet", 10307563); // Does not work in hevm
+```
+
+**✅ CORRECT - Fork via command line:**
+```bash
+hevm test --rpc https://eth-mainnet.g.alchemy.com/v2/P-x0L9coIqzuhfI091DXitR7BzYbABFA --number 10307563
+```
+
+### **Data Retrieval Strategy**:
+**Use `vm.load()` to read real mainnet data in setUp():**
+```solidity
+function setUp() public {
+    // Deploy local contracts
+    localToken = new LocalERC20Token(...);
+    
+    // Read real mainnet data using vm.load()
+    bytes32 balanceSlot = keccak256(abi.encode(VICTIM, uint256(0))); // ERC20 balance slot
+    uint256 realBalance = uint256(vm.load(MAINNET_TOKEN_ADDRESS, balanceSlot));
+    
+    // Import real data to local contracts
+    localToken.setBalance(VICTIM, realBalance);
+}
+```
+
+### **Storage Slot Calculation for ERC20**:
+```solidity
+// Balance slot: keccak256(abi.encode(account, balanceSlotNumber))
+bytes32 balanceSlot = keccak256(abi.encode(account, uint256(0)));
+
+// Allowance slot: keccak256(abi.encode(owner, keccak256(abi.encode(spender, allowanceSlotNumber))))  
+bytes32 allowanceSlot = keccak256(abi.encode(owner, keccak256(abi.encode(spender, uint256(1)))));
+```
+
+## 📚 **Session Experience & Common Pitfalls (Updated: 2024-05)**
+
+### 🏆 **Success Stories & Best Practices Learned**
+
+#### **Dynamic Data Loading Strategy** 
+**Learned**: The most effective approach combines real mainnet data with local contract deployment
+**Implementation**:
+```solidity
+function setUp() public {
+    // Smart environment detection
+    if (block.number == 1) {
+        cheats.createSelectFork("mainnet", TARGET_BLOCK);
+    }
+    
+    // Direct real data access (works with hevm RPC)
+    IERC20 realToken = IERC20(MAINNET_TOKEN_ADDRESS);
+    uint256 realVictimBalance = realToken.balanceOf(VICTIM);
+    uint256 realAllowance = realToken.allowance(VICTIM, BANCOR_ADDRESS);
+    
+    // Local deployment with real data
+    localToken.setBalance(VICTIM, realVictimBalance);
+    bancor.setAllowance(VICTIM, address(this), realAllowance);
+}
+```
+
+#### **Testing Phase Separation**
+**Critical Discovery**: Always run concrete tests first, then symbolic execution
+**Pattern**:
+1. `test_attack_concrete()` → Verify mechanism with known values
+2. `test_attack_symbolic()` → Find boundaries with hevm
+3. Both should use **identical exploit logic**
+
+#### **Profit Boundary Testing Strategy**
+**Learned**: Start with victim's actual balance as target, not arbitrary values
+**Method**:
+```solidity
+// Use real victim balance as initial target
+uint256 TARGET_PROFIT = realVictimBalance; // e.g., 905,987,977,635,678,910,008,152
+assert(!(profit >= TARGET_PROFIT));
+```
+
+### ❌ **Common Mistakes & How to Avoid Them**
+
+#### **Mistake 1: Hard-Coding Critical Values**
+**What I did wrong**: Initially used hard-coded victim balance values
+```solidity
+// ❌ WRONG - Hard-coded values
+uint256 realVictimBalance = 905987977635678910008152; // Hard-coded!
+```
+**Why it's bad**: 
+- Makes code non-reusable
+- Hides the actual data source
+- Can lead to outdated/incorrect values
+
+**✅ CORRECT - Dynamic data retrieval**:
+```solidity
+// ✅ CORRECT - Dynamic reading
+IERC20 realXBPToken = IERC20(XBP_ADDRESS);
+uint256 realVictimBalance = realXBPToken.balanceOf(victim);
+```
+
+#### **Mistake 2: Over-Complicating Fork Management**
+**What I did wrong**: Created complex try-catch logic for fork handling
+```solidity
+// ❌ WRONG - Overly complex
+try cheats.createSelectFork("mainnet", 10_307_563) {
+    // Complex fallback logic...
+} catch {
+    // More complex fallback...
+}
+```
+**Why it's bad**: 
+- hevm doesn't need complex fork logic
+- RPC parameter already provides mainnet access
+- Unnecessary complexity prone to bugs
+
+**✅ CORRECT - Simple conditional**:
+```solidity  
+// ✅ CORRECT - Simple and effective
+if (block.number == 1) {
+    cheats.createSelectFork("mainnet", TARGET_BLOCK);
+}
+// hevm automatically uses RPC for data access
+```
+
+#### **Mistake 3: Misunderstanding hevm vs forge test Data Access**
+**What I confused**: Thinking hevm needs the same setup as forge test
+**Reality**: 
+- `forge test` needs `createSelectFork()` for mainnet data
+- `hevm` uses `--rpc` parameter and can read directly from mainnet
+- Both can use the same setup with smart conditional logic
+
+#### **Mistake 4: Not Validating Data Retrieval**
+**What I missed**: Assuming data retrieval worked without verification
+**Problem**: Victim had 0 balance at target block, making attack impossible
+**Solution**: Always add debug logging to verify retrieved data:
+```solidity
+function test_debug_check_balances() public view {
+    console.log("Real victim balance:", realXBPToken.balanceOf(victim));
+    console.log("Real allowance:", realXBPToken.allowance(victim, BANCOR_ADDRESS));
+}
+```
+
+### 🔧 **Technical Discoveries**
+
+#### **hevm Symbolic Execution with Real Data**
+**Discovery**: hevm can directly access mainnet state via RPC without local fork
+**Command Pattern**:
+```bash
+hevm test --prefix test_attack_symbolic \
+  --rpc https://eth-mainnet.g.alchemy.com/v2/[API_KEY] \
+  --number [BLOCK_NUMBER] \
+  --max-iterations 1000000
+```
+**Benefits**:
+- No need for complex state copying
+- Direct access to real balances and allowances
+- Automatic constraint discovery based on real protocol state
+
+#### **Storage Slot Investigation Workflow**
+**Pattern for investigating unknown balances**:
+```bash
+# 1. Check standard ERC20 balance slot
+cast storage [TOKEN] $(cast index address [VICTIM] 0) --rpc-url [RPC] --block [BLOCK]
+
+# 2. Check allowance slot  
+cast storage [TOKEN] $(cast index address [VICTIM] 1) --rpc-url [RPC] --block [BLOCK]
+
+# 3. Look for Transfer events around target block
+cast logs --from-block [BLOCK-5] --to-block [BLOCK+5] --address [TOKEN] 'Transfer(address,address,uint256)' --rpc-url [RPC]
+```
+
+#### **Event Analysis for Profit Validation**
+**Method**: Use Transfer events to validate theoretical vs actual profit
+```bash
+# Find actual historical transfer
+cast logs --from-block 10307560 --to-block 10307565 \
+  --address 0x28dee01D53FED0Edf5f6E310BF8Ef9311513Ae40 \
+  'Transfer(address,address,uint256)' --rpc-url [RPC]
+```
+**Result**: Our symbolic analysis found exact same profit as historical attack!
+
+### 🎯 **Success Metrics Achieved**
+
+1. **Perfect Historical Match**: Symbolic execution found exact same profit as real attack
+2. **Zero Hard-Coding**: All critical values dynamically retrieved from mainnet  
+3. **Dual Compatibility**: Same code works for both forge test and hevm
+4. **Real Constraint Discovery**: Let protocol logic naturally define boundaries
+5. **Efficient Workflow**: Concrete test → symbolic execution → boundary confirmation
+
+### 📝 **Code Structure Patterns That Work**
+
+#### **Contract Organization**:
+```solidity
+// 1. Interface for real contracts
+interface IERC20 { ... }
+
+// 2. Local implementations with state management
+contract LocalERC20Token { ... }
+contract LocalBancor { ... }
+
+// 3. Main exploit contract with dual-mode setup
+contract BancorExploit {
+    function setUp() public {
+        // Environment detection + dynamic data loading
+    }
+    
+    function test_attack_concrete() public {
+        // Known working values for verification
+    }
+    
+    function test_attack_symbolic(uint256 _amount) public {
+        // Symbolic parameter for boundary discovery
+    }
+}
+```
+
+### 🚨 **Critical Warnings for Future Sessions**
+
+1. **Always verify victim has non-zero balance** before assuming attack is possible
+2. **Use Transfer event logs** to validate theoretical analysis against historical reality  
+3. **Never artificially constrain symbolic parameters** - let protocol constraints emerge naturally
+4. **Always test concrete exploit first** before attempting symbolic execution
+5. **Leverage hevm's direct RPC access** instead of complex local state copying
+
+### 🔄 **Workflow Refinements Discovered**
+
+1. **Data Validation Phase**: Add explicit balance/allowance checking before exploit attempt
+2. **Historical Validation**: Cross-reference findings with actual on-chain events  
+3. **Environment Flexibility**: Design setup to work seamlessly with both forge and hevm
+4. **Real-time Debugging**: Use console.log liberally during development, remove for final version
+
+**These lessons significantly improved the efficiency and reliability of symbolic execution analysis for DeFi exploits.**
